@@ -65,25 +65,29 @@ Con el comando sync recibido:
 
 1. **Verificar si la tabla ya existe** en Supabase antes de crearla:
    ```sql
-   SELECT to_regclass('public.nombre_tabla') IS NOT NULL AS existe;
+   SELECT EXISTS (
+     SELECT 1 FROM information_schema.tables
+     WHERE table_schema = 'public' AND table_name = 'nombre_tabla'
+   ) AS existe;
    ```
    - `false` → crear normalmente
    - `true` → preguntar al analista: "¿Reemplazar (DROP + CREATE) o agregar datos nuevos?"
 
 2. **Aplicar filtro de período** — NUNCA sincronizar data histórica sin límite:
-   - Por defecto: **solo el año en curso** (`WHERE YEAR(fecha) = YEAR(CURDATE())`)
+   - Por defecto: **solo el año en curso** (`WHERE YEAR(col_fecha) = YEAR(CURDATE())`)
    - Si no hay data del año en curso: últimos 3 meses
    - Si el analista pide histórico: máximo 12 meses, nunca más
+   - ⚠️ **NUNCA asumir que la columna de fecha se llama `fecha`** — identificar el nombre real en el describe (`FECHA_GESTION`, `FEC_LLAMADA`, etc.). Si hay varias, preguntar cuál usar. Si no hay ninguna, advertir y preguntar cómo proceder.
    - Comunicar al analista: "Sincronizaré solo datos del año en curso para mantener el dashboard ágil."
 
 3. Crear la tabla con `execute_sql` (**NUNCA `apply_migration`** — lanza `UnauthorizedException`)
 4. Todas las fechas como **TEXT** en el DDL (nunca TIMESTAMPTZ — MySQL puede tener `0000-00-00`)
 5. Disparar sync vía `pg_net.http_get` dentro de `execute_sql`
 6. Verificar en `net._http_response` — polling máximo 10 intentos. Si sigue en null: "El sync está procesando, verificar en 5 min con `SELECT COUNT(*)`."
-7. **Validar post-sync**:
+7. **Validar post-sync** (reemplazar `col_fecha` por la columna real):
    ```sql
    SELECT COUNT(*) FROM tabla;
-   SELECT MIN(fecha), MAX(fecha), COUNT(*) FILTER (WHERE fecha IS NULL) AS nulos FROM tabla;
+   SELECT MIN(col_fecha), MAX(col_fecha), COUNT(*) FILTER (WHERE col_fecha IS NULL) AS nulos FROM tabla;
    ```
    Si nulos > 5% del total, alertar al analista antes de continuar.
 
