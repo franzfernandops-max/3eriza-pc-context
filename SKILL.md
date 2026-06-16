@@ -34,7 +34,7 @@ No construyas dashboards meramente descriptivos. El usuario espera inteligencia 
 |---------|-------|
 | Proyecto | `ejxpojzuovtsplviafbw` |
 | Organización | TFIN (`pqjexgumjugaxsplllhn`) |
-| Dashboard publicado | `https://castidash.netlify.app/` |
+| Destino dashboards | Portal XSell centralizado (los analistas suben el HTML directamente) |
 
 ### Edge Functions Desplegadas
 
@@ -114,17 +114,20 @@ dashboard-query?action=describe&database=VOX_TRES&table=LISTA_DET_SCANIAARG&key=
 **NUNCA sincronizar data histórica de años anteriores sin restricción.** Las tablas MySQL pueden tener millones de filas históricas que causan timeouts en el sync, errores en los chunks de carga a Supabase y dashboards lentos.
 
 Regla por defecto (aplicar siempre salvo que el analista pida explícitamente otro período):
-- **Tablas de gestión/tipificación**: solo el **año en curso** (`WHERE YEAR(fecha) = YEAR(CURDATE())`)
-- **Si la tabla no tiene data del año en curso**: últimos 3 meses (`WHERE fecha >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)`)
+- **Tablas de gestión/tipificación**: solo el **año en curso** (`WHERE YEAR(col_fecha) = YEAR(CURDATE())`)
+- **Si la tabla no tiene data del año en curso**: últimos 3 meses (`WHERE col_fecha >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)`)
 - **Si el analista necesita histórico**: máximo 12 meses, nunca más. Advertir del tiempo estimado.
 
-Comunicar al analista: "Voy a sincronizar solo los datos del año en curso para mantener el dashboard ágil. Si necesitas histórico de otro período, puedo ajustarlo."
+⚠️ **NUNCA asumir que la columna de fecha se llama `fecha`.** Cada CRM la nombra distinto: `FECHA_GESTION`, `FEC_LLAMADA`, `FECHA_HORA`, `created_at`, etc. Identificar el nombre real en el `describe` (paso 4) ANTES de construir el `WHERE`. Si hay varias columnas de fecha, preguntar al analista cuál usar para el filtro de período. Si la tabla no tiene ninguna columna de fecha, advertir que no se puede aplicar filtro temporal y preguntar cómo proceder (sincronizar completa con límite de filas, o cancelar).
 
 ### REGLA CRÍTICA: Verificar si la tabla ya existe en Supabase antes de crearla
 
 ```sql
--- Verificar existencia ANTES de ejecutar el DDL
-SELECT to_regclass('public.nombre_tabla') IS NOT NULL AS existe;
+-- Verificar existencia ANTES de ejecutar el DDL (robusto, no afectado por RLS de catálogo)
+SELECT EXISTS (
+  SELECT 1 FROM information_schema.tables
+  WHERE table_schema = 'public' AND table_name = 'nombre_tabla'
+) AS existe;
 ```
 - Si devuelve `false` → crear normalmente con `execute_sql` + DDL
 - Si devuelve `true` → **PREGUNTAR** al analista: "La tabla ya existe con X filas. ¿Quieres reemplazarla (DROP + CREATE) o agregar datos nuevos (INSERT ignorando duplicados)?"
@@ -151,10 +154,11 @@ Después de confirmar status 200, ejecutar siempre:
 SELECT COUNT(*) FROM nombre_tabla;
 
 -- 2. Rango de fechas y nulos críticos
+-- Reemplazar col_fecha por el nombre real de la columna de fecha identificada en el describe
 SELECT
-  MIN(fecha) AS fecha_min,
-  MAX(fecha) AS fecha_max,
-  COUNT(*) FILTER (WHERE fecha IS NULL) AS fechas_nulas
+  MIN(col_fecha) AS fecha_min,
+  MAX(col_fecha) AS fecha_max,
+  COUNT(*) FILTER (WHERE col_fecha IS NULL) AS fechas_nulas
 FROM nombre_tabla;
 ```
 
@@ -194,15 +198,18 @@ Mostrar al usuario: N filas, columnas detectadas con tipo inferido (DNI, teléfo
 ### Paso 2 — Disparar `excel-lookup` via pg_net
 
 ```sql
+-- pg_net.http_post usa parámetros POSICIONALES: (url, body, headers) — NO usar named params (url:=, body:=)
 SELECT net.http_post(
-  url  := 'https://ejxpojzuovtsplviafbw.supabase.co/functions/v1/excel-lookup',
-  body := jsonb_build_object(
+  'https://ejxpojzuovtsplviafbw.supabase.co/functions/v1/excel-lookup',
+  jsonb_build_object(
     'key',     '3eriza-pc-2026',
     'records', '[...array JSON del Excel...]'::jsonb,
     'sources', '["supabase","casti","principal"]'::jsonb
   ),
-  headers := '{"Content-Type":"application/json"}'::jsonb
+  '{}'::jsonb,
+  '{"Content-Type":"application/json"}'::jsonb
 ) AS request_id;
+-- Firma: net.http_post(url, body, params, headers, timeout_ms)
 -- Luego: SELECT id, status_code, content::text FROM net._http_response WHERE id = [request_id];
 ```
 
@@ -503,14 +510,24 @@ Los gráficos de área/línea usan gradiente vertical **naranja arriba → morad
 
 ```javascript
 function makeGradient(ctx, chartArea) {
+  if (!chartArea) return 'rgba(255,107,19,0.4)';  // primer render: chartArea aún no existe
   const grad = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
   grad.addColorStop(0,   'rgba(255,107,19, 0.85)');   /* naranja sólido arriba */
   grad.addColorStop(0.4, 'rgba(93,23,160,  0.60)');   /* morado al medio */
   grad.addColorStop(1,   'rgba(93,23,160,  0.05)');   /* casi transparente abajo */
   return grad;
 }
-/* Aplicar en dataset: backgroundColor: makeGradient(ctx, chart.chartArea) */
-/* borderColor: '#FF6B13', borderWidth: 2, fill: true, tension: 0.4 */
+```
+
+⚠️ **NUNCA llamar `makeGradient(ctx, chart.chartArea)` directamente en el dataset** — en el primer render `chart.chartArea` es `undefined` y el gradiente sale en naranja plano. Usar la forma **scriptable** de Chart.js, que se re-evalúa en cada layout:
+
+```javascript
+backgroundColor: function(context) {
+  const chart = context.chart;
+  const {ctx, chartArea} = chart;
+  return makeGradient(ctx, chartArea);   // se recalcula cuando chartArea ya existe
+},
+borderColor: '#FF6B13', borderWidth: 2, fill: true, tension: 0.4
 ```
 
 Para **barras**: naranja `#FF6B13` (barras principales) / morado `#5D17A0` (secundarias).
@@ -637,7 +654,31 @@ Consulta el skill `xlsx` para reglas de formato de Excel. Además:
 4. **Analizar**: Patrones, correlaciones, estacionalidades, anomalías
 
 ### Predicción de Escenarios
-Usar numpy con regresión lineal + desviación estándar para 3 escenarios (optimista = base + 1.5σ, pesimista = base - 1.5σ). Para datos categóricos, analizar tendencia de composición porcentual.
+
+Regresión lineal + desviación estándar para 3 escenarios (optimista = base + 1.5σ, base, pesimista = base − 1.5σ). Para datos categóricos, analizar tendencia de composición porcentual.
+
+⚠️ **El dashboard HTML corre en el navegador — NO hay numpy/pandas/Python.** La proyección debe escribirse en **JavaScript puro**. Patrón de mínimos cuadrados sin librerías:
+
+```javascript
+// Regresión lineal simple sobre serie temporal (x = índice de mes, y = valor)
+function linReg(values) {
+  const n = values.length;
+  const xs = values.map((_, i) => i);
+  const sumX = xs.reduce((a, b) => a + b, 0);
+  const sumY = values.reduce((a, b) => a + b, 0);
+  const sumXY = xs.reduce((a, x, i) => a + x * values[i], 0);
+  const sumX2 = xs.reduce((a, x) => a + x * x, 0);
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / n;
+  // desviación estándar de los residuos
+  const resid = values.map((y, i) => y - (slope * i + intercept));
+  const sigma = Math.sqrt(resid.reduce((a, r) => a + r * r, 0) / n);
+  return { slope, intercept, sigma };
+}
+// Proyección mes futuro k: base = slope*(n+k) + intercept; optimista = base + 1.5*sigma; pesimista = base - 1.5*sigma
+```
+
+Si el análisis se hace **offline en el contenedor** (no en el dashboard) para generar insights del resumen ejecutivo, ahí sí se puede usar numpy/pandas con Python. La distinción: **HTML entregable = JS puro; análisis previo de Claude = Python permitido.**
 
 ### Resumen Ejecutivo (framework encadenado)
 **Hallazgos** (dato→hecho): cuantificados, comparados con benchmark, priorizados por impacto
@@ -731,6 +772,8 @@ const json = await fetch(EF + '?action=download&table=gestiones_scaniaarg').then
 const rows = (json.d && json.d.data) || [];
 // Descarga paginada internamente, devuelve todo. Máx 200k filas.
 ```
+
+⚠️ **Regla de tamaño:** antes de usar `download`, verificar `total_filas` de la tabla (vía `action=tables` o `count_only=true`). Si supera **50,000 filas**, NO usar `download` — el browser puede hacer timeout o recibir respuesta parcial sin error. En ese caso usar `action=query` con paginación (`limit` + `offset`) o filtros server-side que reduzcan el set. Para dashboards, casi nunca se necesitan todas las filas crudas en el cliente: agregar/contar server-side cuando sea posible.
 
 #### `?action=query` — Query con filtros, columnas, orden y paginación ⭐
 El más importante para dashboards interactivos. Soporta GET y POST.
@@ -887,19 +930,25 @@ async function loadDashboard() {
 El dashboard NUNCA debe aparecer en blanco mientras carga. Siempre mostrar estado de carga:
 
 ```javascript
+// showLoading SOLO pinta el skeleton. NO intenta restaurar valores —
+// de eso se encarga renderKPIs() que escribe el valor real directamente.
 function showLoading(active) {
+  if (!active) return;  // al desactivar, renderKPIs ya sobrescribe el innerHTML
   document.querySelectorAll('.kpi-value').forEach(el => {
-    el.innerHTML = active
-      ? '<span style="display:inline-block;width:80px;height:28px;background:var(--border);border-radius:6px;animation:pulse 1.2s infinite"></span>'
-      : el.dataset.value || el.innerHTML;
+    el.innerHTML = '<span style="display:inline-block;width:80px;height:28px;background:var(--border);border-radius:6px;animation:pulse 1.2s infinite"></span>';
   });
 }
+
+// renderKPIs escribe SIEMPRE el valor calculado — esto borra el skeleton.
+// Ejemplo: document.getElementById('kpi-ventas').textContent = totalVentas;
 
 function showError(msg) {
   document.getElementById('dashboard-error').style.display = 'block';
   document.getElementById('dashboard-error').textContent = '⚠ ' + msg;
 }
 ```
+
+⚠️ El skeleton se quita porque `renderKPIs()` reescribe el `innerHTML`/`textContent` de cada KPI con su valor real. Si un KPI nunca se actualiza en `renderKPIs()`, se queda con el skeleton para siempre — asegurar que cada `.kpi-value` del HTML tenga su línea correspondiente en `renderKPIs()`.
 
 ```css
 @keyframes pulse {
