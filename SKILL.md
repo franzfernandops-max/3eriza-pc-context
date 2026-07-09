@@ -1,6 +1,6 @@
 ---
 name: dashboard-3eriza
-description: "Dashboards analíticos XSell (fondo oscuro #1A1025, naranja #FF6B13, púrpura #5D17A0, logo XSell + P&C). MySQL (intranetpbx 95+ BDs, CASTI) → Supabase → Edge Functions → HTML con Chart.js. Plantillas: Inbound, Outbound, Encuestas, Perfilamiento, Reclamos. SPD/HPD configurable. Exploración post-dashboard + menú analista. Activar para: dashboards, KPIs, predicciones, estrategias, SQL, queries, Supabase, sync, reportes, correo resumen, explorar datos, cruzar tablas, segmentar, buscar tablas MySQL. También: métricas, tendencias, forecast, cuadros de mando, bases de datos, datos tabulares, visualizaciones, reclamos, libro de reclamaciones."
+description: "Dashboards analíticos XSell (fondo oscuro #1A1025, naranja #FF6B13, púrpura #5D17A0, logo XSell + P&C), responsive y optimizados para móvil. MySQL (intranetpbx 95+ BDs, CASTI) → Supabase → Edge Functions → HTML con Chart.js. Plantillas: Inbound, Outbound, Encuestas, Perfilamiento, Reclamos. SPD/HPD configurable. Exploración post-dashboard + menú analista. Activar para: dashboards, KPIs, predicciones, estrategias, SQL, queries, Supabase, sync, reportes, correo resumen, explorar datos, cruzar tablas, segmentar, buscar tablas MySQL, dashboard responsive, optimizar dashboard para móvil. También: métricas, tendencias, forecast, cuadros de mando, bases de datos, datos tabulares, visualizaciones, reclamos, libro de reclamaciones."
 ---
 
 # Dashboard Analítico XSell — Planeamiento y Control
@@ -502,7 +502,52 @@ body {
   color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.8px;
 }
+
+/* ---------- Responsive (OBLIGATORIO en todo dashboard) ---------- */
+/* Grid fluido: usa .grid para los contenedores de tarjetas/gráficos.
+   Colapsa 4 → 2 (tablet) → 1 (móvil). Para cards que abarcan 2 columnas usa .col-2. */
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(4, 1fr); }
+.col-2 { grid-column: span 2; }
+.col-4 { grid-column: span 4; }
+
+/* Contenedor de gráfico con alto fijo → Chart.js escala bien con maintainAspectRatio:false */
+.chart-box { position: relative; width: 100%; height: 300px; }
+
+/* Tablet: 4 → 2 columnas */
+@media (max-width: 1024px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+  .col-2, .col-4 { grid-column: span 2; }
+}
+
+/* Móvil: todo a 1 columna, tipografía y paddings reducidos */
+@media (max-width: 640px) {
+  body { padding: 12px; font-size: 13px; }
+  .grid { grid-template-columns: 1fr; gap: 12px; }
+  .col-2, .col-4 { grid-column: span 1; }
+  .card { padding: 14px 16px; border-radius: 12px; }
+  .kpi-value { font-size: 22px; }
+  .kpi-label { font-size: 10px; }
+  .kpi-icon-badge { width: 30px; height: 30px; top: 12px; right: 12px; font-size: 14px; }
+  .chart-box { height: 240px; }
+  /* Header apilado: logo/título arriba, fecha abajo */
+  header { flex-direction: column; align-items: flex-start !important; gap: 8px; }
+  /* Tablas anchas: scroll horizontal propio, no romper el layout */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { min-width: 520px; }
+}
 ```
+
+### Optimización Móvil (OBLIGATORIO)
+
+Los dashboards se abren tanto en desktop como desde el celular. Todo dashboard debe verse y funcionar bien en móvil, sin scroll horizontal accidental ni texto diminuto. Reglas:
+
+1. **Meta viewport.** Incluir SIEMPRE en el `<head>`: `<meta name="viewport" content="width=device-width, initial-scale=1.0">`. Sin él el móvil renderiza a ~980px y todo se ve minúsculo. Es el error #1.
+2. **Grid fluido, nunca anchos fijos en px.** Los contenedores de KPIs y gráficos usan `.grid` (ya en el CSS base): colapsa 4 → 2 columnas (≤1024px) → 1 columna (≤640px). Para cards que abarcan 2 columnas usa `.col-2`. Nunca fijes `width:900px` u offsets absolutos que rompan en pantallas angostas.
+3. **Gráficos en `.chart-box`.** Cada `<canvas>` va dentro de `<div class="chart-box">` y Chart.js corre con `maintainAspectRatio:false`. Así el gráfico llena el ancho y el CSS reduce su alto en móvil (300px → 240px). Sin `width`/`height` fijos en el `<canvas>`.
+4. **Tablas con scroll propio.** Ranking y detalle no caben en 1 columna: envolver en `<div class="table-scroll"><table>…</table></div>` para que solo la tabla haga scroll horizontal.
+5. **Toques cómodos.** Botones, filtros y selects con altura mínima ~40px y `font-size` ≥14px (evita el zoom automático de iOS al enfocar inputs). No dependas del hover para mostrar datos clave: en móvil no hay hover.
+6. **Header apilado.** En móvil el header pasa a columna (logo+título arriba, fecha abajo) — ya cubierto por el CSS base. Logo a `height:40px`, no agrandarlo en móvil.
+7. **Verificación.** Antes de entregar, revisar mentalmente a 375px de ancho (iPhone estándar): ¿hay scroll horizontal? ¿algún KPI se corta? ¿los gráficos se leen? Si algo se desborda, es un ancho fijo olvidado.
 
 ### Gradientes para Gráficos Chart.js (patrón oficial)
 
@@ -589,6 +634,8 @@ Panel `.card` con fondo `var(--bg-card)`, borde superior `3px solid var(--orange
 Usa Chart.js. El CSS base está en la sección "Arquitectura del Dashboard" — siempre incluirlo completo.
 
 ```html
+<!-- OBLIGATORIO en el <head>: sin este meta el dashboard se ve diminuto en móvil -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <!-- CDN obligatorios -->
 <link href="https://fonts.googleapis.com/css2?family=Anton&family=Sora:wght@300;400;600;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
@@ -598,12 +645,16 @@ Usa Chart.js. El CSS base está en la sección "Arquitectura del Dashboard" — 
 ```javascript
 Chart.defaults.font.family = "'Manrope', sans-serif";
 Chart.defaults.color = '#B0A8C0';
+Chart.defaults.responsive = true;
+Chart.defaults.maintainAspectRatio = false;   // el gráfico llena su .chart-box (alto por CSS); clave para móvil
 Chart.defaults.plugins.legend.labels.usePointStyle = true;
 Chart.defaults.plugins.legend.labels.boxWidth = 8;
 Chart.defaults.scale.grid.color = 'rgba(255,255,255,0.05)';
 Chart.defaults.scale.border.display = false;
 Chart.defaults.scale.ticks.color = '#8A7FA0';
 ```
+
+> Envuelve cada `<canvas>` en un `<div class="chart-box">`. Con `maintainAspectRatio:false` el gráfico se adapta a ese contenedor y el CSS responsive reduce su alto en móvil (300px → 240px). No pongas `width`/`height` fijos como atributos del `<canvas>`.
 
 **Paleta para datasets:**
 ```javascript
